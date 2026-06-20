@@ -114,7 +114,48 @@ def extract_sale_items(client: anthropic.Anthropic, chirashis: list[dict]) -> li
     return items.get("items", [])
 
 
-def generate_meal_plan(client: anthropic.Anthropic, items: list[dict]) -> str:
+def load_meal_history(github_token: str, gist_id: str) -> list[dict]:
+    try:
+        resp = requests.get(
+            f"https://api.github.com/gists/{gist_id}",
+            headers={"Authorization": f"Bearer {github_token}"},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        content = data.get("files", {}).get("history.json", {}).get("content", "")
+        if not content:
+            return []
+        return json.loads(content).get("history", [])
+    except Exception as e:
+        print(f"[履歴読み込み失敗] {e}")
+        return []
+
+
+def save_meal_history(github_token: str, gist_id: str, week: str, menus: list[str], existing_history: list[dict]) -> None:
+    try:
+        history = existing_history.copy()
+        history.append({"week": week, "menus": menus})
+        if len(history) > 4:
+            history = history[-4:]
+        payload = {"files": {"history.json": {"content": json.dumps({"history": history}, ensure_ascii=False, indent=2)}}}
+        resp = requests.patch(
+            f"https://api.github.com/gists/{gist_id}",
+            headers={"Authorization": f"Bearer {github_token}"},
+            json=payload,
+            timeout=10,
+        )
+        resp.raise_for_status()
+    except Exception as e:
+        print(f"[履歴保存失敗] {e}")
+
+
+def extract_menu_names(meal_plan: str) -> list[str]:
+    matches = re.findall(r'\|\s*\d+/\d+\([月火水木金土日]\)\s*\|\s*([^|]+?)\s*\|', meal_plan)
+    return [m.strip() for m in matches if "残り" not in m]
+
+
+def generate_meal_plan(client: anthropic.Anthropic, items: list[dict], history: list[dict] | None = None) -> str:
     """特売品リストから7日分の夕食献立をSlack向けMarkdownで生成する"""
     today = date.today()
     tomorrow = today + timedelta(days=1)
@@ -125,11 +166,15 @@ def generate_meal_plan(client: anthropic.Anthropic, items: list[dict]) -> str:
 
     items_json = json.dumps(items, ensure_ascii=False, indent=2)
 
+    history_section = ""
+    if history:
+        lines = "\n".join(f"- {h['week']}週: {'、'.join(h['menus'])}" for h in history)
+        history_section = f"\n【過去4週間のメニュー（重複を避けてください）】\n{lines}\n"
+
     prompt = f"""以下の特売品リストを使って、1人暮らし男性の7日分夕食献立を作成してください。
 
 【特売品リスト】
-{items_json}
-
+{items_json}{history_section}
 【献立作成ルール】
 - 対象期間: {fmt_date(tomorrow)} ～ {fmt_date(week_later)}（{fmt_date(today)}は除く）
 - 2人分作って翌日は余りものを食べる（「新メニュー → 翌日残り物」を交互に繰り返す（1日目:新メニューA, 2日目:メニューAの残り, 3日目:新メニューB, 4日目:メニューBの残り…）4メニュー×2日 = 8食で7日をカバー）
@@ -174,7 +219,14 @@ def main() -> None:
         print("[ERROR] SLACK_WEBHOOK_URL が設定されていません")
         sys.exit(1)
 
+    github_token = os.environ.get("GITHUB_TOKEN", "")
+    gist_id = os.environ.get("GIST_ID", "")
+
     client = anthropic.Anthropic(api_key=anthropic_api_key)
+
+    history = []
+    if github_token and gist_id:
+        history = load_meal_history(github_token, gist_id)
 
     try:
         chirashis = fetch_chirashis()
@@ -186,9 +238,14 @@ def main() -> None:
 
     try:
         items = extract_sale_items(client, chirashis)
-        meal_plan = generate_meal_plan(client, items)
+        meal_plan = generate_meal_plan(client, items, history)
         send_slack(slack_webhook_url, meal_plan)
         print("[OK] 献立をSlackに送信しました")
+
+        if github_token and gist_id:
+            menus = extract_menu_names(meal_plan)
+            today_str = date.today().isoformat()
+            save_meal_history(github_token, gist_id, today_str, menus, history)
 
         shopping_match = re.search(r'(\*🛒.+)', meal_plan, re.DOTALL)
         if shopping_match:
