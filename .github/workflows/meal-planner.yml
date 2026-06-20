@@ -2,7 +2,7 @@ name: Meal Planner
 
 on:
   schedule:
-    - cron: '0 21 * * 0'  # 毎週月曜 JST 6:00 (日曜 UTC 21:00)
+    - cron: '0 21 * * 0'  # 毎週日曜 UTC 21:00 = 月曜 JST 6:00 に実行
   workflow_dispatch:
 
 jobs:
@@ -21,3 +21,10 @@ jobs:
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+
+      - name: Upload shopping list
+        uses: actions/upload-artifact@v4
+        with:
+          name: shopping-list
+          path: shopping_list.txt
+          retention-days: 1

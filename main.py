@@ -189,6 +189,11 @@ def main() -> None:
         meal_plan = generate_meal_plan(client, items)
         send_slack(slack_webhook_url, meal_plan)
         print("[OK] 献立をSlackに送信しました")
+
+        shopping_match = re.search(r'(\*🛒.+)', meal_plan, re.DOTALL)
+        if shopping_match:
+            with open("shopping_list.txt", "w", encoding="utf-8") as f:
+                f.write(shopping_match.group(1))
     except Exception as e:
         msg = f":warning: 献立生成に失敗しました: {e}"
         print(f"[ERROR] {msg}")

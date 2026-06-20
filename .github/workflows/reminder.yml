@@ -1,0 +1,32 @@
+name: Shopping Reminder
+
+on:
+  schedule:
+    - cron: '0 8 * * 1'  # 毎週月曜 JST 17:00 (UTC 8:00)
+  workflow_dispatch:
+
+jobs:
+  remind:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download shopping list
+        uses: dawidd6/action-download-artifact@v6
+        with:
+          workflow: meal-planner.yml
+          name: shopping-list
+          if_no_artifact_found: warn
+
+      - name: Send reminder to Slack
+        run: |
+          if [ -f shopping_list.txt ]; then
+            PAYLOAD=$(jq -n --rawfile text shopping_list.txt '{"text": ("🔔 *今夜の買い物リストです*\n\n" + $text)}')
+            curl -s -X POST -H 'Content-type: application/json' \
+              --data "$PAYLOAD" \
+              "$SLACK_WEBHOOK_URL"
+          else
+            curl -s -X POST -H 'Content-type: application/json' \
+              --data '{"text": "📭 今週の買い物リストが見つかりませんでした（献立生成に失敗した可能性があります）"}' \
+              "$SLACK_WEBHOOK_URL"
+          fi
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
